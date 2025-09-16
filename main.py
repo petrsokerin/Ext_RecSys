@@ -12,24 +12,12 @@ from src.aggregation import get_external_vectors, transform_aggregation
 from src.utils import fix_seed, save_config
 from src.model import SASRec, train_sasrec
 
-# seed = 0
-
-# max_len = 200
-# batch_size = 128
-# embedding_size = 64
-# n_pretrain_epochs = 1
-# lr_pretrain = 0.001
-
-# agg_method = "mean"
-# n_exttrain_epochs = 1
-# lr_exttrain = 0.001
-# n_ext_users = 10
-
 CONFIG_NAME = "main"
 CONFIG_PATH = "config"
 
 @hydra.main(config_path=CONFIG_PATH, config_name=CONFIG_NAME, version_base=None)
 def main(cfg: DictConfig):
+    print("Aggregation method", cfg['agg_method'])
     file_name = 'model_{}_{}_agg_{}'.format(
             "sasrec",
             cfg["seed"],
@@ -76,56 +64,60 @@ def main(cfg: DictConfig):
     optimizer = optim.Adam(model.parameters(), lr=cfg["lr_pretrain"])
     criterion = nn.CrossEntropyLoss()
 
+    checkpoint_name = f"model_{'sasrec'}_{cfg['seed']}"
+    metrics_name = f"model_{'sasrec'}_{cfg['seed']}.csv"
+    if cfg['run_pretrain']:
     # Обучаем модель
-    checkpoint_name = f"model_{'sasrec'}_{cfg['seed']}"
-    metrics_name = f"model_{'sasrec'}_{cfg['seed']}"
-    model, pretrain_ndcg = train_sasrec(
-        model, 
-        train_loader,
-        val_loader,
-        optimizer,
-        criterion,
-        device,
-        num_items,
-        mode="pretrain",
-        checkpoint_name=checkpoint_name,
-        metrics_name=metrics_name,
-        epochs=cfg["n_pretrain_epochs"],
-    )
+        model, pretrain_ndcg = train_sasrec(
+            model, 
+            train_loader,
+            val_loader,
+            optimizer,
+            criterion,
+            device,
+            num_items,
+            checkpoint_path=cfg["checkpoint_path"],
+            mode="pretrain",
+            checkpoint_name=checkpoint_name,
+            metrics_name=metrics_name,
+            epochs=cfg["n_pretrain_epochs"],
+        )
 
-    model.load_state_dict(torch.load(os.path.join(cfg["checkpoint_path"], "best_model.pth")))
+    if cfg['run_aggregation']:
 
-    user_embeddings, all_timestamps = get_external_vectors(model, device, df, train_users, cfg["n_ext_users"])
-    time_list, time_to_embeddings, ext_embeddings = transform_aggregation(all_timestamps, user_embeddings, cfg["n_ext_users"], cfg["embedding_size"])
+        model.load_state_dict(torch.load(os.path.join(cfg["checkpoint_path"], f"{checkpoint_name}.pth")))
 
-    model.add_external_features(
-        time_list,
-        time_to_embeddings,
-        ext_embeddings,
-        head_method=cfg["head_method"],
-        agg_type=cfg["agg_type"],
-        additional_config=cfg["aggregations"][cfg["agg_type"]]
-    )
-    optimizer = optim.Adam(model.parameters(), lr=cfg["lr_exttrain"])
-    criterion = nn.CrossEntropyLoss()
+        user_embeddings, all_timestamps = get_external_vectors(model, device, df, train_users, cfg["n_ext_users"])
+        time_list, time_to_embeddings, ext_embeddings = transform_aggregation(all_timestamps, user_embeddings, cfg["n_ext_users"], cfg["embedding_size"])
 
-    checkpoint_name = f"model_{'sasrec'}_{cfg['seed']}"
-    metrics_name = f"model_{'sasrec'}_{cfg['seed']}|agg={cfg['agg_type']}"
-    model, ext_ndcg = train_sasrec(
-        model, 
-        train_loader,
-        val_loader,
-        optimizer,
-        criterion,
-        device,
-        num_items,
-        mode="external",
-        checkpoint_name=checkpoint_name,
-        metrics_name=metrics_name,
-        epochs=cfg["n_exttrain_epochs"]
-    )
+        model.add_external_features(
+            time_list,
+            time_to_embeddings,
+            ext_embeddings,
+            head_method=cfg["head_method"],
+            agg_type=cfg["agg_method"],
+            additional_config=cfg["aggregations"][cfg["agg_method"]]
+        )
+        optimizer = optim.Adam(model.parameters(), lr=cfg["lr_exttrain"])
+        criterion = nn.CrossEntropyLoss()
 
-    print(f"pretrain NDCG {pretrain_ndcg}, External NDCG {ext_ndcg}")
+        checkpoint_name = f"model_{'sasrec'}_{cfg['seed']}|agg={cfg['agg_method']}"
+        metrics_name = f"model_{'sasrec'}_{cfg['seed']}|agg={cfg['agg_method']}.csv"
+        model, ext_ndcg = train_sasrec(
+            model, 
+            train_loader,
+            val_loader,
+            optimizer,
+            criterion,
+            device,
+            num_items,
+            checkpoint_path=cfg["checkpoint_path"],
+            mode="external",
+            checkpoint_name=checkpoint_name,
+            metrics_name=metrics_name,
+            epochs=cfg["n_exttrain_epochs"]
+        )
+
 
 
 if __name__ == "__main__":

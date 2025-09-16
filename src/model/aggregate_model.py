@@ -11,20 +11,6 @@ class BaseAggregation(ABC, nn.Module):
         super().__init__(*args, **kwargs) 
         self.ext_flag = False
 
-    # @property
-    # @abstractmethod
-    # def head(self) -> nn.Module:
-    #     pass
-
-    # @property
-    # @abstractmethod
-    # def embedding_size(self) -> int:
-    #     pass
-
-    # @property
-    # @abstractmethod
-    # def num_items(self) -> int:
-    #     pass
 
     @abstractmethod
     def forward(self):
@@ -119,21 +105,22 @@ class BaseAggregation(ABC, nn.Module):
         ext_times = torch.tensor(self.time_to_embeddings[ext_ids], dtype=torch.float32).reshape(bs, seq_len, self.n_ext_users)
         return ext_context, ext_times
     
-    def aggregate_external_embedding(self, internal_emb, external_context, ext_times):
+    def aggregate_external_embedding(self, internal_emb, external_context, ext_times, timestamps):
         bs, seq_len, internal_emb_size = internal_emb.shape 
         all_external_context = external_context.reshape(bs*seq_len, self.n_ext_users, -1)
         all_internal_emb = internal_emb.reshape(bs*seq_len, -1)
         all_ext_times = ext_times.reshape(bs*seq_len, self.n_ext_users, -1)
+        all_timestamps = timestamps.reshape(bs*seq_len, -1)
 
         all_agg_embeddings = []
         for i in range(bs*seq_len):
-            external_context, internal_emb, ext_times = all_external_context[i], all_internal_emb[i], all_ext_times[i]
+            external_context, internal_emb, ext_times, times = all_external_context[i], all_internal_emb[i], all_ext_times[i], all_timestamps[i]
 
             if self.agg_type == "mean":
                 agg_embeddings = torch.Tensor(torch.mean(external_context, axis=0))
 
             elif self.agg_type == "max":
-                agg_embeddings = torch.Tensor(torch.max(external_context, axis=0))
+                agg_embeddings = torch.Tensor(torch.max(external_context, axis=0).values)
 
             elif "attention" in self.agg_type:
                 external_context = torch.Tensor(external_context).to(internal_emb.device)
@@ -147,21 +134,21 @@ class BaseAggregation(ABC, nn.Module):
                     if not self.learnable_attention_matrix:
                         raise ValueError("Learnable attention matrix wasn't initialized!")
                     external_context_prep = self.learnable_attention_matrix(external_context)
-                    user_emb = self.learnable_attention_matrix(user_emb)
+                    internal_emb = self.learnable_attention_matrix(internal_emb)
 
                 elif self.agg_type == "kernel_attention":
                     if not self.attention_kernel:
                         raise ValueError("Attention kernel wasn't initialized!")
                     external_context_prep = self.attention_kernel(external_context)
-                    user_emb = self.attention_kernel(user_emb)
+                    internal_emb = self.attention_kernel(internal_emb)
 
                 else: external_context_prep = external_context
 
-                dot_prod = external_context_prep @ user_emb.unsqueeze(0).transpose(1, 0)
+                dot_prod = external_context_prep @ internal_emb.unsqueeze(0).transpose(1, 0)
                 softmax_dot_prod = nn.functional.softmax(dot_prod, 0)
 
                 if "attention_hawkes" in self.agg_type:
-                    times = torch.Tensor((times - ext_times) * self.exp_param).to(user_emb.device)
+                    times = torch.Tensor((times - ext_times) * self.exp_param).to(internal_emb.device)
                     times = times.unsqueeze(-1)
                     time_part = torch.exp(times)
                     softmax_dot_prod = softmax_dot_prod * time_part
@@ -169,17 +156,17 @@ class BaseAggregation(ABC, nn.Module):
                 agg_embeddings = (softmax_dot_prod * external_context).sum(dim=0)
 
             elif self.agg_type == "exp_hawkes":
-                agg_embeddings = np.mean(external_context * np.exp((times - ext_times) * self.exp_param).reshape(-1,1), axis=0)
-                agg_embeddings = torch.Tensor(agg_embeddings).to(user_emb.device)
+                agg_embeddings = torch.mean(external_context * torch.exp((times - ext_times) * self.exp_param).reshape(-1,1), axis=0)
+                agg_embeddings = torch.Tensor(agg_embeddings).to(internal_emb.device)
                 
             elif "hawkes" in self.agg_type:
                 if not self.hawkes_nn:
                     raise ValueError("Hawkes NN wasn't initialized!")
                 
-                external_context = torch.Tensor(external_context).to(user_emb.device)
-                concated = torch.cat((external_context, user_emb.tile((len(external_context), 1))), axis=1)
+                external_context = torch.Tensor(external_context).to(internal_emb.device)
+                concated = torch.cat((external_context, internal_emb.tile((len(external_context), 1))), axis=1)
                 emb_part = self.hawkes_nn(concated)
-                times = torch.Tensor((times - ext_times) * self.exp_param).to(user_emb.device)
+                times = torch.Tensor((times - ext_times) * self.exp_param).to(internal_emb.device)
                 times = times.unsqueeze(-1)
                 if self.agg_type == "learnable_hawkes":
                     if not self.hawkes_time_nn:
@@ -204,7 +191,8 @@ class BaseAggregation(ABC, nn.Module):
     def external_forward(self, internal_emb, timestamps):
         external_context, ext_times = self.get_external_embeddings(timestamps)
         external_context, ext_times = external_context.to(internal_emb.device), ext_times.to(internal_emb.device)
-        external_emb = self.aggregate_external_embedding(internal_emb, external_context, ext_times)
+        timestamps = torch.tensor(timestamps).to(internal_emb.device)
+        external_emb = self.aggregate_external_embedding(internal_emb, external_context, ext_times, timestamps)
 
         if self.head_method == "replace":
             extended_data = torch.cat([internal_emb, external_emb], dim=2)

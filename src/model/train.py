@@ -68,7 +68,7 @@ def train_sasrec(
 ):
     model.to(device)
     best_ndcg = 0
-    metrics = pd.DataFrame([])
+    all_metrics_df = pd.DataFrame()
     metric_names = ["Mode", "Epoch", "Train_Loss", "Val_Loss", "Val_NDCG"]
 
     for epoch in range(epochs):
@@ -99,8 +99,11 @@ def train_sasrec(
         metrics = [mode, epoch, train_loss, val_loss, val_ndcg]
         print(f"Epoch {epoch+1}, Loss: {train_loss}, Val NDCG@{10}: {val_ndcg:.4f}")
 
-        metrics_df = pd.DataFrame.from_dict({metric_name: metric_val for metric_name, metric_val in zip(metric_names, metrics)})
-        metrics = pd.concat([metrics, metrics_df])
+        metrics_df = pd.DataFrame(
+            [{metric_name: metric_val for metric_name, metric_val in zip(metric_names, metrics)}],
+            index=[0]  # Provide an index
+        )
+        all_metrics_df = pd.concat([all_metrics_df, metrics_df], ignore_index=True)
 
         # Сохраняем лучшую модель
         if val_ndcg > best_ndcg:
@@ -111,7 +114,7 @@ def train_sasrec(
     metrics_prev_path = os.path.join(checkpoint_path, metrics_name.split("|")[0])
     if os.path.exists(metrics_prev_path):
         prev_metric = pd.read_csv(metrics_prev_path)
-        metrics = pd.concat([prev_metric, metrics])
-    metrics.to_csv(metrics_full_path, index=False)
+        all_metrics_df = pd.concat([prev_metric, all_metrics_df])
+    all_metrics_df.to_csv(metrics_full_path, index=False)
 
     return model, best_ndcg
