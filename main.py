@@ -18,13 +18,12 @@ CONFIG_PATH = "config"
 @hydra.main(config_path=CONFIG_PATH, config_name=CONFIG_NAME, version_base=None)
 def main(cfg: DictConfig):
     print("Aggregation method", cfg['agg_method'])
-    file_name = 'model_{}_{}_agg_{}'.format(
-            "sasrec",
-            cfg["seed"],
-            cfg["agg_method"],
-    )
-
-    save_config(cfg["checkpoint_path"], CONFIG_PATH, CONFIG_NAME, file_name)
+    if cfg['save_mode'] == 'test':
+        print("!!!!!!!!!!!!!!!!!! TEST MODE! NO SAVED RESULTS !!!!!!!!!!!!!!!!!!!!")
+    else:
+        file_name = f"{cfg['exp_name']}|model={'sasrec'}_seed={cfg['seed']}_final={cfg['final']}|agg={cfg['agg_method']}__head={cfg['head_method']}"
+        save_config(cfg["checkpoint_path"], CONFIG_PATH, CONFIG_NAME, file_name)
+    
     fix_seed(cfg["seed"])
     
     # Скачиваем и загружаем данные
@@ -47,7 +46,7 @@ def main(cfg: DictConfig):
     val_dataset = ValSASRecDataset(val_sequences, val_times, cfg["max_len"])
 
     train_loader = DataLoader(train_dataset, batch_size=cfg["batch_size"], shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=cfg["batch_size"], shuffle=False)
+    val_loader = DataLoader(val_dataset, batch_size=cfg["val_batch_size"], shuffle=False)
 
 
     # Инициализируем модель
@@ -58,14 +57,15 @@ def main(cfg: DictConfig):
         num_heads=cfg["num_heads"],
         num_blocks=cfg["num_blocks"],
         dropout_rate=cfg["dropout_rate"],
+        final=cfg['final'],
         max_len=cfg["max_len"],
     ).to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=cfg["lr_pretrain"])
     criterion = nn.CrossEntropyLoss()
 
-    checkpoint_name = f"model_{'sasrec'}_{cfg['seed']}"
-    metrics_name = f"model_{'sasrec'}_{cfg['seed']}.csv"
+    checkpoint_name = f"{cfg['exp_name']}|model={'sasrec'}_seed={cfg['seed']}_final={cfg['final']}"
+    metrics_name = f"{checkpoint_name}.csv"
     if cfg['run_pretrain']:
     # Обучаем модель
         model, pretrain_ndcg = train_sasrec(
@@ -80,6 +80,7 @@ def main(cfg: DictConfig):
             mode="pretrain",
             checkpoint_name=checkpoint_name,
             metrics_name=metrics_name,
+            save_mode=cfg['save_mode'],
             epochs=cfg["n_pretrain_epochs"],
         )
 
@@ -96,13 +97,13 @@ def main(cfg: DictConfig):
             ext_embeddings,
             head_method=cfg["head_method"],
             agg_type=cfg["agg_method"],
-            additional_config=cfg["aggregations"][cfg["agg_method"]]
+            additional_config=cfg["aggregations"][cfg["agg_method"]]["additional_config"]
         )
         optimizer = optim.Adam(model.parameters(), lr=cfg["lr_exttrain"])
         criterion = nn.CrossEntropyLoss()
 
-        checkpoint_name = f"model_{'sasrec'}_{cfg['seed']}|agg={cfg['agg_method']}"
-        metrics_name = f"model_{'sasrec'}_{cfg['seed']}|agg={cfg['agg_method']}.csv"
+        checkpoint_name = f"{cfg['exp_name']}|model={'sasrec'}_seed={cfg['seed']}_final={cfg['final']}|agg={cfg['agg_method']}__head={cfg['head_method']}"
+        metrics_name = f"{checkpoint_name}.csv"
         model, ext_ndcg = train_sasrec(
             model, 
             train_loader,
@@ -115,6 +116,7 @@ def main(cfg: DictConfig):
             mode="external",
             checkpoint_name=checkpoint_name,
             metrics_name=metrics_name,
+            save_mode=cfg['save_mode'],
             epochs=cfg["n_exttrain_epochs"]
         )
 

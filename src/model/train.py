@@ -16,9 +16,13 @@ def calculate_ndcg_loss(model, dataloader, criterion, device, k=10):
     total_loss = 0
 
     with torch.no_grad():
-        for (input_seqs, input_times), targets in dataloader:
+        for (input_seqs, input_times, train_pad_mask), (targets, label_pad_mask) in dataloader:
             input_seqs, input_times, targets = input_seqs.to(device), input_times.to(device), targets.to(device)
-            outputs = model(input_seqs, input_times)
+
+            targets = targets - 1
+            
+            train_pad_mask, label_pad_mask = train_pad_mask.to(device), label_pad_mask.to(device)
+            outputs = model(input_seqs, train_pad_mask, input_times)
 
             last_outputs = outputs[:, -1, :]
 
@@ -64,6 +68,7 @@ def train_sasrec(
     mode="pretrain",
     checkpoint_name="",
     metrics_name="",
+    save_mode='prod',
     epochs=10
 ):
     model.to(device)
@@ -75,16 +80,20 @@ def train_sasrec(
         model.train()
         total_loss = 0
 
-        for batch_idx, ((input_seqs, input_times), targets) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")):
+        for batch_idx, ((input_seqs, train_pad_mask, input_times), (targets, label_pad_mask)) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")):
             input_seqs, input_times, targets = input_seqs.to(device), input_times.to(device), targets.to(device)
-
+            train_pad_mask, label_pad_mask = train_pad_mask.to(device), label_pad_mask.to(device)
+            
+            targets = targets - 1
             optimizer.zero_grad()
-            outputs = model(input_seqs, input_times)
+            outputs = model(input_seqs, train_pad_mask, input_times)
 
-            # Получаем предсказания для последнего элемента в последовательности
-            # last_outputs = outputs[:, -1, :]
-            #loss = criterion(last_outputs, targets)
-            outputs, targets = outputs.reshape(-1, num_items+1), targets.reshape(-1)
+            outputs, targets, label_pad_mask = outputs.reshape(-1, num_items), targets.reshape(-1), label_pad_mask.reshape(-1)
+            
+            targets = targets.masked_fill(mask=(~label_pad_mask), value=-100)
+            # print(outputs.shape, targets.shape, padding_mask.shape)
+            # outputs, targets = outputs[padding_mask], targets[padding_mask]
+            # print(outputs.shape, targets.shape)
             loss = criterion(outputs, targets)
             loss.backward()
             optimizer.step()
@@ -97,7 +106,7 @@ def train_sasrec(
         val_ndcg, val_loss = calculate_ndcg_loss(model, val_loader, criterion, device)
 
         metrics = [mode, epoch, train_loss, val_loss, val_ndcg]
-        print(f"Epoch {epoch+1}, Loss: {train_loss}, Val NDCG@{10}: {val_ndcg:.4f}")
+        print(f"Epoch {epoch+1}, Tr Loss: {train_loss:.4f}, Val Loss {val_loss:.4f}, Val NDCG@{10}: {val_ndcg:.4f}")
 
         metrics_df = pd.DataFrame(
             [{metric_name: metric_val for metric_name, metric_val in zip(metric_names, metrics)}],
@@ -106,15 +115,17 @@ def train_sasrec(
         all_metrics_df = pd.concat([all_metrics_df, metrics_df], ignore_index=True)
 
         # Сохраняем лучшую модель
-        if val_ndcg > best_ndcg:
+        if save_mode != 'test' and val_ndcg > best_ndcg:
             best_ndcg = val_ndcg
+            
             torch.save(model.state_dict(), os.path.join(checkpoint_path, f"{checkpoint_name}.pth"))
 
-    metrics_full_path = os.path.join(checkpoint_path, metrics_name)
-    metrics_prev_path = os.path.join(checkpoint_path, metrics_name.split("|")[0])
-    if os.path.exists(metrics_prev_path):
-        prev_metric = pd.read_csv(metrics_prev_path)
-        all_metrics_df = pd.concat([prev_metric, all_metrics_df])
-    all_metrics_df.to_csv(metrics_full_path, index=False)
+        if save_mode != 'test':
+            metrics_full_path = os.path.join(checkpoint_path, metrics_name)
+            metrics_prev_path = os.path.join(checkpoint_path, metrics_name.split("|")[0])
+            if os.path.exists(metrics_prev_path):
+                prev_metric = pd.read_csv(metrics_prev_path)
+                all_metrics_df = pd.concat([prev_metric, all_metrics_df])
+            all_metrics_df.to_csv(metrics_full_path, index=False)
 
     return model, best_ndcg

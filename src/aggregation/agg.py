@@ -20,7 +20,7 @@ def get_external_vectors(model, device, dataset, train_users, n_ext_users):
         for user_id in tqdm(user_subset, desc="Processing users"):
             user_data = subset_data[subset_data['user_id'] == user_id]
             user_items = user_data['item_id'].tolist()
-            timestamps = user_data['timestamp'].astype(int).tolist()
+            timestamps = user_data['timestamp'].tolist()
 
             if len(user_items) <= model.max_len:
                 seq = [0] * (model.max_len - len(user_items)) + user_items
@@ -49,6 +49,8 @@ def get_external_vectors(model, device, dataset, train_users, n_ext_users):
 def transform_aggregation(all_timestamps, user_embeddings, n_ext_users, embedding_size):
     agg_raw_data_embeddings = []
 
+    min_timestamp = np.min(all_timestamps)
+
     for timestamp in tqdm(all_timestamps, desc="Aggregating embeddings"):
         # Собираем последние эмбеддинги для каждого пользователя на данный момент времени
         current_embeddings = []
@@ -67,7 +69,7 @@ def transform_aggregation(all_timestamps, user_embeddings, n_ext_users, embeddin
             n_embeddings = len(current_embeddings)
             for i in range(n_ext_users - n_embeddings):
                 current_embeddings.append(np.zeros(embedding_size))
-                current_times.append(-1e7)
+                current_times.append(min_timestamp)
         agg_raw_data_embeddings.append([timestamp, current_times, current_embeddings])
 
 

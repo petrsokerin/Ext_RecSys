@@ -26,5 +26,6 @@ def download_movielens1m(data_path):
 def load_data(data_path):
     ratings = pd.read_csv(os.path.join(data_path, "ml-1m", 'ratings.dat'), sep='::', engine='python',
                          names=['user_id', 'item_id', 'rating', 'timestamp'])
-    ratings['timestamp'] = pd.to_datetime(ratings['timestamp'], unit='s')
+    ratings['timestamp'] = ratings['timestamp'] / 1e6
+    # ratings['timestamp'] = pd.to_datetime(ratings['timestamp'], unit='s')
     return ratings
