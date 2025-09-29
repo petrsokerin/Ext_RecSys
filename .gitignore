@@ -20,3 +20,4 @@ pictures/*
 .docker/*
 train_classifier1.py
 config/*
+backup/*
