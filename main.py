@@ -7,10 +7,13 @@ from torch.utils.data import DataLoader
 import hydra
 from omegaconf import DictConfig
 
-from src.data import get_sequences, load_data, download_movielens1m, ValSASRecDataset, TrainSASRecDataset
+from src.data import get_sequences, load_data, download_dataset, prepare_data, ValSASRecDataset, TrainSASRecDataset
 from src.aggregation import get_external_vectors, transform_aggregation
 from src.utils import fix_seed, save_config
-from src.model import SASRec, train_sasrec
+from src.model import SASRec, train_sasrec, calculate_ndcg_loss
+
+import warnings
+warnings.filterwarnings("ignore")
 
 CONFIG_NAME = "main"
 CONFIG_PATH = "config"
@@ -27,19 +30,10 @@ def main(cfg: DictConfig):
     fix_seed(cfg["seed"])
     
     # Скачиваем и загружаем данные
-    download_movielens1m(cfg['data_path'])
-    df = load_data(cfg['data_path'])
+    download_dataset(cfg['data_path'], cfg['dataset'])
+    df = load_data(cfg['data_path'], cfg['dataset'])
 
-    df = df[df["rating"] > 3.5]
-
-    # Подготовка данных
-    num_items = df['item_id'].nunique()
-
-    user2id = {val:i for i, val in enumerate(df['user_id'].unique())}
-    item2id = {val:i+1 for i, val in enumerate(df['item_id'].unique())}
-
-    df['user_id'] = df['user_id'].map(user2id)
-    df['item_id'] = df['item_id'].map(item2id)
+    df, num_items = prepare_data(df, cfg['mark_thr'], cfg['filter_items'], cfg['filter_users'])
 
     (train_sequences, val_sequences), (train_times, val_times), (train_users, val_users) = get_sequences(df)
     train_dataset = TrainSASRecDataset(train_sequences, train_times, cfg["max_len"])
@@ -61,7 +55,7 @@ def main(cfg: DictConfig):
         max_len=cfg["max_len"],
     ).to(device)
 
-    optimizer = optim.Adam(model.parameters(), lr=cfg["lr_pretrain"])
+    optimizer = optim.AdamW(model.parameters(), lr=cfg["lr_pretrain"])
     criterion = nn.CrossEntropyLoss()
 
     checkpoint_name = f"{cfg['exp_name']}|model={'sasrec'}_seed={cfg['seed']}_final={cfg['final']}"
@@ -85,40 +79,47 @@ def main(cfg: DictConfig):
         )
 
     if cfg['run_aggregation']:
-
-        model.load_state_dict(torch.load(os.path.join(cfg["checkpoint_path"], f"{checkpoint_name}.pth")))
+        checkpoint_name = f"{cfg['preload_checkpoint']}.pth" if cfg['preload_checkpoint'] else f"{checkpoint_name}.pth"
+        load_path = os.path.join(cfg["checkpoint_path"], checkpoint_name)
+        model.load_state_dict(torch.load(load_path))
 
         user_embeddings, all_timestamps = get_external_vectors(model, device, df, train_users, cfg["n_ext_users"])
         time_list, time_to_embeddings, ext_embeddings = transform_aggregation(all_timestamps, user_embeddings, cfg["n_ext_users"], cfg["embedding_size"])
+        try:
+            model.add_external_features(
+                time_list,
+                time_to_embeddings,
+                ext_embeddings,
+                head_method=cfg["head_method"],
+                agg_type=cfg["agg_method"],
+                freezing=cfg['freeze'],
+                alpha=cfg['alpha'],
+                additional_config=cfg["aggregations"][cfg["agg_method"]]["additional_config"]
+            )
+            optimizer = optim.Adam(model.parameters(), lr=cfg["lr_exttrain"])
+            criterion = nn.CrossEntropyLoss()
 
-        model.add_external_features(
-            time_list,
-            time_to_embeddings,
-            ext_embeddings,
-            head_method=cfg["head_method"],
-            agg_type=cfg["agg_method"],
-            additional_config=cfg["aggregations"][cfg["agg_method"]]["additional_config"]
-        )
-        optimizer = optim.Adam(model.parameters(), lr=cfg["lr_exttrain"])
-        criterion = nn.CrossEntropyLoss()
-
-        checkpoint_name = f"{cfg['exp_name']}|model={'sasrec'}_seed={cfg['seed']}_final={cfg['final']}|agg={cfg['agg_method']}__head={cfg['head_method']}"
-        metrics_name = f"{checkpoint_name}.csv"
-        model, ext_ndcg = train_sasrec(
-            model, 
-            train_loader,
-            val_loader,
-            optimizer,
-            criterion,
-            device,
-            num_items,
-            checkpoint_path=cfg["checkpoint_path"],
-            mode="external",
-            checkpoint_name=checkpoint_name,
-            metrics_name=metrics_name,
-            save_mode=cfg['save_mode'],
-            epochs=cfg["n_exttrain_epochs"]
-        )
+            checkpoint_name = f"{cfg['exp_name']}|model={'sasrec'}_seed={cfg['seed']}_final={cfg['final']}|agg={cfg['agg_method']}__head={cfg['head_method']}__freeze={cfg['freeze']}"
+            metrics_name = f"{checkpoint_name}.csv"
+            model, ext_ndcg = train_sasrec(
+                model, 
+                train_loader,
+                val_loader,
+                optimizer,
+                criterion,
+                device,
+                num_items,
+                checkpoint_path=cfg["checkpoint_path"],
+                mode="external",
+                learnable=cfg["aggregations"][cfg["agg_method"]]['learnable'],
+                checkpoint_name=checkpoint_name,
+                metrics_name=metrics_name,
+                save_mode=cfg['save_mode'],
+                epochs=cfg["n_exttrain_epochs"]
+            )
+        except Exception as e: 
+            print(e)
+            print("Fail")
 
 
 
