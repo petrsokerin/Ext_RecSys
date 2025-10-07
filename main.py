@@ -76,6 +76,7 @@ def main(cfg: DictConfig):
             metrics_name=metrics_name,
             save_mode=cfg['save_mode'],
             epochs=cfg["n_pretrain_epochs"],
+            val_every=cfg['validate_every']
         )
 
     if cfg['run_aggregation']:
@@ -115,7 +116,8 @@ def main(cfg: DictConfig):
                 checkpoint_name=checkpoint_name,
                 metrics_name=metrics_name,
                 save_mode=cfg['save_mode'],
-                epochs=cfg["n_exttrain_epochs"]
+                epochs=cfg["n_exttrain_epochs"],
+                val_every=cfg['validate_every']
             )
         except Exception as e: 
             print(e)

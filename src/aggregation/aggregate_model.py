@@ -61,13 +61,16 @@ class BaseAggregation(ABC, nn.Module):
         time_to_embeddings,
         ext_features,
         head_method="replace",
+        freezing=True,
         alpha=0.5,
         agg_type="mean",
         additional_config=None
     ):
 
         self.ext_flag = True
-        self.freeze()
+        self.freezing = freezing
+        if self.freezing:
+            self.freeze()
 
         self.head_method = head_method
         

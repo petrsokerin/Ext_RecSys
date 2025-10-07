@@ -7,7 +7,6 @@ class TrainSASRecDataset(Dataset):
         self.times = times
         self.max_len = max_len
 
-
     def __len__(self):
         return len(self.sequences)
     

@@ -21,19 +21,25 @@ def get_external_vectors(model, device, dataset, train_users, n_ext_users):
             user_data = subset_data[subset_data['user_id'] == user_id]
             user_items = user_data['item_id'].tolist()
             timestamps = user_data['timestamp'].tolist()
-
+            
             if len(user_items) <= model.max_len:
-                seq = [0] * (model.max_len - len(user_items)) + user_items
+                padding_mask = torch.ones(model.max_len, dtype=torch.bool)
+                n_pads = model.max_len - len(user_items)               
+                seq = [0] * (n_pads) + user_items
+                padding_mask[:n_pads] = False
                 input_seq = torch.tensor([seq], dtype=torch.long).to(device)
-                embeddings = model.get_internal_embeddings(input_seq).cpu().numpy()[0, :, :]
-
+                padding_mask = padding_mask.to(device)
+                embeddings = model.get_internal_embeddings(input_seq, padding_mask).cpu().numpy()[0, :, :]
             else:
                 for i in range(0, len(user_items) + 1, model.max_len):
                     seq = user_items[i:model.max_len + i]
+                    padding_mask = torch.ones(len(seq), dtype=torch.bool)
                     input_seq = torch.tensor([seq], dtype=torch.long).to(device)
-                    batch_emb = model.get_internal_embeddings(input_seq).cpu().numpy()[0, :, :]
+                    padding_mask = padding_mask.to(device)
+                    batch_emb = model.get_internal_embeddings(input_seq, padding_mask).cpu().numpy()[0, :, :]
                     if i > 0:
                         embeddings = np.concatenate([embeddings, batch_emb], axis=0)
+                        all_pad_mask = np.concatenate([embeddings, batch_emb], axis=0)
                     else:
                         embeddings = batch_emb
 
